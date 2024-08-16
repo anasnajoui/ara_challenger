@@ -1,22 +1,17 @@
 import pandas as pd
 import streamlit as st
 import openai
-from dotenv import load_dotenv
-import os
 import plotly.graph_objects as go
 import plotly.colors as colors
 import streamlit.components.v1 as components
 import plotly.express as px
 
-# Load environment variables
-load_dotenv()
-
 class OpenAIClient:
     """Handles interactions with the OpenAI API."""
 
     def __init__(self):
-        """Initialize the OpenAI client with the API key from environment variables."""
-        self.client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        """Initialize the OpenAI client with the API key from Streamlit secrets."""
+        self.client = openai.OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
     def challenge_score(self, category, kri, description, risk_level, risk_score):
         """
@@ -322,7 +317,7 @@ class StreamlitApp:
                     risk_level = row.iloc[2]
                     risk_score = float(row.iloc[3])
 
-                    with st.expander(label=f"**{kri_name} - {risk_level}**", expanded=True):
+                    with st.expander(label=f"**{kri_name} - {self.get_colored_risk_level(risk_level)}**", expanded=True):
                         col1, col2 = st.columns([3, 1])
                         with col1:
                             st.write(kri_description)
@@ -331,7 +326,7 @@ class StreamlitApp:
                             if kri_name in kri_data and kri_data[kri_name]:
                                 st.write("Sub-KRIs:")
                                 for sub_index, sub_kri in kri_data[kri_name]:
-                                    with st.container(border=True):
+                                    with st.container():
                                         sub_kri_title = sub_kri.iloc[0]  # Title of sub-KRI
                                         sub_kri_description = sub_kri.iloc[1]   # Description of sub-KRI
                                         sub_kri_risk_level = sub_kri.iloc[2]  # Risk level of sub-KRI
@@ -463,13 +458,13 @@ class StreamlitApp:
 
     def get_colored_risk_level(self, risk_level):
         color = {
-            "Low risk": "green",
-            "Medium-low risk": "lightgreen",
-            "Medium risk": "yellow",
-            "Medium-high risk": "orange",
-            "High risk": "red"
+            "Low": "green",
+            "Medium-Low": "lightgreen",
+            "Medium": "orange",
+            "Medium-High": "salmon",
+            "High": "red"
         }.get(risk_level, "black")
-        return f'<span style="color: {color};"><strong>{risk_level}</strong></span>'
+        return f'<span style="color: {color};">{risk_level}</span>'
 
 if __name__ == "__main__":
     app = StreamlitApp()
