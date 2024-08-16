@@ -309,7 +309,7 @@ class StreamlitApp:
 
         for i, (tab, (category, category_score)) in enumerate(zip(tabs, sorted_categories)):
             with tab:
-                st.metric(label="Category Risk Score", value=f"{category_score:.2f}")
+                st.markdown(f"## Category Risk Score: {category_score:.2f}")
 
                 for index, row in category_data[category][1:]:  # Skip the category row
                     kri_name = row.iloc[0]
@@ -464,7 +464,7 @@ class StreamlitApp:
             "Medium-High": "salmon",
             "High": "red"
         }.get(risk_level, "black")
-        return f'<span style="color: {color};">{risk_level}</span>'
+        return f'<span style="color: {color};"><strong>{risk_level}</strong></span>'
 
 if __name__ == "__main__":
     app = StreamlitApp()
