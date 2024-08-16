@@ -447,7 +447,7 @@ class StreamlitApp:
             if "messages" not in st.session_state:
                 st.session_state.messages = []
 
-            messages = st.container(height=200)  # Fixed height of 200 pixels
+            messages = st.container()  # Fixed height of 200 pixels
             for message in st.session_state.messages:
                 messages.chat_message(message["role"]).write(message["content"])
 
