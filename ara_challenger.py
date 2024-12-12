@@ -1,17 +1,36 @@
 import pandas as pd
 import streamlit as st
 import openai
+from dotenv import load_dotenv
+import os
 import plotly.graph_objects as go
 import plotly.colors as colors
 import streamlit.components.v1 as components
 import plotly.express as px
+import numpy as np
+
+# Load environment variables
+load_dotenv()
 
 class OpenAIClient:
     """Handles interactions with the OpenAI API."""
 
     def __init__(self):
-        """Initialize the OpenAI client with the API key from Streamlit secrets."""
-        self.client = openai.OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+        """Initialize the OpenAI client with the API key from .env file."""
+        load_dotenv()  # Load environment variables from .env file
+        api_key = os.getenv("OPENAI_API_KEY")
+        
+        if not api_key:
+            st.error("OPENAI_API_KEY is not set in the .env file")
+            st.stop()
+        
+        try:
+            self.client = openai.OpenAI(api_key=api_key)
+            # Test the API key
+            self.client.models.list()
+        except openai.OpenAIError as e:
+            st.error(f"Error initializing OpenAI client: {str(e)}")
+            st.stop()
 
     def challenge_score(self, category, kri, description, risk_level, risk_score):
         """
@@ -44,7 +63,6 @@ class OpenAIClient:
                 {"role": "system", "content": "You are a risk assessment expert."},
                 {"role": "user", "content": prompt}
             ],
-            max_tokens=150
         )
 
         return response.choices[0].message.content.strip()
@@ -82,8 +100,7 @@ class OpenAIClient:
 class ARAParser:
     """Parses Asset Risk Assessment data from an Excel file."""
 
-    RISK_CATEGORIES = ["Counterparty", "Liquidity", "Specific", "Market", "Operational", "ESG", "Phase"]
-
+    RISK_CATEGORIES = ["Issue", "Issuer", "Counterparty", "Liquidity", "Specific", "Market", "Operational", "ESG", "Phase"]
 
     @staticmethod
     def load_excel_data(file_path):
@@ -100,75 +117,87 @@ class ARAParser:
 
     @classmethod
     def parse_ara_data(cls, df):
+        try:
+            # Extract basic information from the first row
+            company_name = df.iloc[0, 0]
+            assessment_date = df.iloc[0, 1]
+            total_risk_score = float(df.iloc[0, 3])
 
-        """
-        Parse the Asset Risk Assessment data from the DataFrame.
-
-        Args:
-            df (pandas.DataFrame): The DataFrame containing the ARA data.
-
-        Returns:
-            tuple: Containing company_name, assessment_date, total_risk_score, category_data, kri_data
-        """
-
-        # Extract basic information from the first row
-        company_name = df.iloc[0, 0]
-        assessment_date = df.iloc[0, 1]
-        total_risk_score = float(df.iloc[0, 3])
-
-        # Initialize variables to track current category and KRI
-        current_category = None
-        current_kri = None
-        
-        # Initialize dictionaries to store category and KRI data
-        category_data = {}
-        kri_data = {}
-
-        # Iterate through each row of the DataFrame, starting from the second row
-        for index, row in df.iloc[1:].iterrows():
-            print(row)
-            print()
-
-            # Skip rows where all values are NaN
-            if pd.isna(row).all():
-                continue
-
-            # Identify risk category
-            if isinstance(row.iloc[0], str) and len(row.iloc[0].split()) == 2 and 'risk' in row.iloc[0].lower():
-                category_words = row.iloc[0].lower().split()
-                other_word = next(word for word in category_words if word != 'risk')
-                if other_word in [cat.lower() for cat in cls.RISK_CATEGORIES]:
-                    current_category = row.iloc[0]
-                    print(f"Identified category: {current_category}")
-                    category_data[current_category] = [(index, row.copy())]  # Add the category row itself
-                    print(f"Added category row: {row}")
+            # Initialize variables to track current category and KRI
+            current_category = None
+            current_kri = None
+            previous_row_type = None  # Can be 'category', 'kri', or 'sub_kri'
             
-            # Identify KRI
-            elif not pd.isna(row.iloc[0]) and not pd.isna(row.iloc[3]):
-                if current_category is None:
-                    print(f"Warning: Found KRI before any category: {row.iloc[0]}")
+            # Initialize dictionaries to store category and KRI data
+            category_data = {}
+            kri_data = {}
+
+            # Iterate through each row of the DataFrame, starting from the second row
+            for index, row in df.iloc[1:].iterrows():
+                # Skip rows where all values are NaN
+                if pd.isna(row).all():
                     continue
-                
-                current_kri = row.iloc[0]
-                print(f"Identified KRI: {current_kri}")
-                
-                category_data[current_category].append((index, row))
-                kri_data[current_kri] = []
 
-            # Identify Sub-KRI
-            elif not pd.isna(row.iloc[1]) and pd.isna(row.iloc[3]) and not pd.isna(row.iloc[2]):
-                if current_kri:
-                    kri_data[current_kri].append((index, row))
-                    print(f"Identified Sub-KRI for {current_kri}: {row.iloc[1]}")
+                print(f"Processing row {index}:")
+                print(row)
+
+                # Identify risk category
+                if isinstance(row.iloc[0], str) and (
+                    (len(row.iloc[0].split()) == 2 and 'risk' in row.iloc[0].lower()) or
+                    row.iloc[0].startswith(('Issue', 'Issuer'))
+                ):
+                    current_category = row.iloc[0]
+                    current_kri = None
+                    previous_row_type = 'category'
+                    print(f"Identified category: {current_category}")
+                    category_data[current_category] = [(index, row.copy())]
+                
+                # Identify KRI
+                elif not pd.isna(row.iloc[0]) and not pd.isna(row.iloc[3]):
+                    if current_category is None:
+                        print(f"Warning: Found KRI before any category: {row.iloc[0]}")
+                        continue
+                    
+                    current_kri = row.iloc[0]
+                    previous_row_type = 'kri'
+                    print(f"Identified KRI: {current_kri}")
+                    
+                    category_data[current_category].append((index, row))
+                    kri_data[current_kri] = []
+
+                # Handle KRI or Sub-KRI with empty risk cell
+                elif not pd.isna(row.iloc[0]) and pd.isna(row.iloc[3]):
+                    if previous_row_type == 'category':
+                        # This is a KRI with empty risk cell
+                        current_kri = row.iloc[0]
+                        previous_row_type = 'kri'
+                        print(f"Identified KRI with empty risk cell: {current_kri}")
+                        category_data[current_category].append((index, row))
+                        kri_data[current_kri] = []
+                    elif previous_row_type in ['kri', 'sub_kri']:
+                        # This is a Sub-KRI
+                        if current_kri:
+                            kri_data[current_kri].append((index, row))
+                            previous_row_type = 'sub_kri'
+                            print(f"Identified Sub-KRI for {current_kri}: {row.iloc[1]}")
+                        else:
+                            print(f"Warning: Found Sub-KRI before any KRI: {row.iloc[1]}")
+                    else:
+                        print(f"Unrecognized row: {row.iloc[0]}")
+
                 else:
-                    print(f"Warning: Found Sub-KRI before any KRI: {row.iloc[1]}")
+                    print(f"Unrecognized row: {row.iloc[0]}")
 
-        print("\nParsing Results:")
-        print(f"Categories found: {list(category_data.keys())}")
-        print(f"Categories with data: {[cat for cat, data in category_data.items() if data]}")
-        print(f"Total KRIs found: {len(kri_data)}")
+            print("\nParsing Results:")
+            print(f"Categories found: {list(category_data.keys())}")
+            print(f"Categories with data: {[cat for cat, data in category_data.items() if data]}")
+            print(f"Total KRIs found: {len(kri_data)}")
 
-        return company_name, assessment_date, total_risk_score, category_data, kri_data
+            return company_name, assessment_date, total_risk_score, category_data, kri_data
+
+        except Exception as e:
+            print(f"Error in parse_ara_data: {str(e)}")
+            raise
 
 class StreamlitApp:
     """Manages the Streamlit application interface."""
@@ -187,7 +216,7 @@ class StreamlitApp:
         if "challenges" not in st.session_state:
             st.session_state.challenges = {}
 
-        st.title("Hi! I'm your Asset Risk Assessment AI 🤖")
+        st.title("Hi! I'm your Risk Assessment AI 🤖")
 
         uploaded_file = st.file_uploader("Upload your ARA file", type="xlsm")
         
@@ -205,6 +234,9 @@ class StreamlitApp:
 
             except Exception as e:
                 st.error(f"An error occurred while processing the file: {str(e)}")
+                st.write("Error details:")
+                st.write(self.df.head())  # Display the first few rows of the DataFrame
+                raise  # Re-raise the exception to see the full traceback in the console
 
         # Add JavaScript for programmatic tab switching
         st.markdown("""
@@ -309,15 +341,17 @@ class StreamlitApp:
 
         for i, (tab, (category, category_score)) in enumerate(zip(tabs, sorted_categories)):
             with tab:
-                st.markdown(f"## Category Risk Score: {category_score:.2f}")
+                # Format category score as percentage if below 1
+                category_score_display = f"{category_score:.2%}" if category_score < 1 else f"{category_score:.2f}"
+                st.markdown(f"## Category Risk Score: {category_score_display}")
 
                 for index, row in category_data[category][1:]:  # Skip the category row
                     kri_name = row.iloc[0]
                     kri_description = row.iloc[1]
-                    risk_level = row.iloc[2]
+                    risk_level = str(row.iloc[2])  # Convert to string to handle non-string values
                     risk_score = float(row.iloc[3])
 
-                    with st.expander(label=f"**{kri_name} - {self.get_colored_risk_level(risk_level)}**", expanded=True):
+                    with st.expander(label=f"**{kri_name} - {risk_level}**", expanded=True):
                         col1, col2 = st.columns([3, 1])
                         with col1:
                             st.write(kri_description)
@@ -326,18 +360,22 @@ class StreamlitApp:
                             if kri_name in kri_data and kri_data[kri_name]:
                                 st.write("Sub-KRIs:")
                                 for sub_index, sub_kri in kri_data[kri_name]:
-                                    with st.container():
+                                    with st.container(border=True):
                                         sub_kri_title = sub_kri.iloc[0]  # Title of sub-KRI
                                         sub_kri_description = sub_kri.iloc[1]   # Description of sub-KRI
-                                        sub_kri_risk_level = sub_kri.iloc[2]  # Risk level of sub-KRI
+                                        sub_kri_risk_level = str(sub_kri.iloc[2])  # Risk level of sub-KRI
                                         st.markdown(f"**{sub_kri_title}** : {sub_kri_description}")
                                         st.markdown(self.get_colored_risk_level(sub_kri_risk_level), unsafe_allow_html=True)
 
                         with col2:
+                            # Format risk score as percentage if below 1
+                            risk_score_display = f"{risk_score:.2%}" if risk_score < 1 else f"{risk_score:.2f}"
+                            
                             # Create a gauge chart for the risk score
                             fig = go.Figure(go.Indicator(
                                 mode = "gauge+number",
                                 value = risk_score,
+                                number = {'valueformat': '.2%' if risk_score < 1 else '.2f'},
                                 domain = {'x': [0, 1], 'y': [0, 1]},
                                 gauge = {
                                     'axis': {'range': [None, 10], 'tickwidth': 1},
@@ -361,10 +399,10 @@ class StreamlitApp:
                                 st.write("Challenge:", challenge)
                         
                         with col4:
-                            risk_levels = ["Low", "Medium-Low", "Medium", "Medium-High", "High"]
+                            risk_levels = ["Low", "Medium-Low", "Medium", "Medium-High", "High", "nan"]
                             new_risk_level = st.selectbox(f"Change Risk Level", 
                                                           options=risk_levels,
-                                                          index=risk_levels.index(risk_level),
+                                                          index=risk_levels.index(risk_level) if risk_level in risk_levels else 0,
                                                           key=f"risk_level_{category}_{kri_name}")
                             
                             if new_risk_level != risk_level:
@@ -442,7 +480,7 @@ class StreamlitApp:
             if "messages" not in st.session_state:
                 st.session_state.messages = []
 
-            messages = st.container()  # Fixed height of 200 pixels
+            messages = st.container(height=200)  # Fixed height of 200 pixels
             for message in st.session_state.messages:
                 messages.chat_message(message["role"]).write(message["content"])
 
@@ -458,14 +496,18 @@ class StreamlitApp:
 
     def get_colored_risk_level(self, risk_level):
         color = {
-            "Low": "green",
-            "Medium-Low": "lightgreen",
-            "Medium": "orange",
-            "Medium-High": "salmon",
-            "High": "red"
-        }.get(risk_level, "black")
+            "Low risk": "green",
+            "Medium-low risk": "lightgreen",
+            "Medium risk": "orange",
+            "Medium-high risk": "salmon",
+            "High risk": "red",
+            "nan": "grey"
+        }.get(str(risk_level), "black")
         return f'<span style="color: {color};"><strong>{risk_level}</strong></span>'
 
 if __name__ == "__main__":
     app = StreamlitApp()
     app.run()
+
+
+
